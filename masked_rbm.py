@@ -1,5 +1,6 @@
+import numpy as np
 import torch
-from torch.nn import functional as F
+from torch import nn
 from torch.nn.utils import parameters_to_vector
 import qucumber
 
@@ -9,25 +10,50 @@ class MaskedBinaryRBM(qucumber.rbm.BinaryRBM):
     #  is applied to the weight-matrix every time the weight matrix is used.
 
     def __init__(
-        self, num_visible, num_hidden, zero_weights=False, mask=None, gpu=True
+        self, init_weights, mask, gpu=True
     ):
+        self.mask = mask.to(self.weights) if mask is not None else 1
+        self.init_weights = init_weights.to(self.weights)
+
         super(MaskedBinaryRBM, self).__init__(
-            num_visible, num_hidden, zero_weights=zero_weights, gpu=gpu
+            init_weights.shape[0], init_weights.shape[1],
+            zero_weights=True, gpu=gpu
+        )  # no point randomizing weights if we're gonna overwrite them anyway
+
+        self.weights = nn.Parameter(self.mask * self.init_weights)
+
+    def initialize_parameters(self, zero_weights=False):
+        """Randomize the parameters of the RBM"""
+
+        gen_tensor = torch.zeros if zero_weights else torch.randn
+        self.weights = nn.Parameter(
+            (
+                gen_tensor(
+                    self.num_hidden,
+                    self.num_visible,
+                    device=self.device,
+                    dtype=torch.double,
+                )
+                * self.mask
+                / np.sqrt(self.num_visible)
+            ),
+            requires_grad=False,
         )
 
-        self.mask = mask.to(self.weights) if mask is not None else 1
+        self.visible_bias = nn.Parameter(
+            torch.zeros(self.num_visible, device=self.device, dtype=torch.double),
+            requires_grad=False,
+        )
+        self.hidden_bias = nn.Parameter(
+            torch.zeros(self.num_hidden, device=self.device, dtype=torch.double),
+            requires_grad=False,
+        )
 
-    def effective_energy(self, v):
-        v = v.to(self.weights)
-        if len(v.shape) < 2:
-            v = v.unsqueeze(0)
-
-        visible_bias_term = torch.mv(v, self.visible_bias)
-        hid_bias_term = F.softplus(
-            F.linear(v, self.weights * self.mask, self.hidden_bias)
-        ).sum(1)
-
-        return -(visible_bias_term + hid_bias_term)
+    @staticmethod
+    def create_mask(matrix, p=0.5):
+        vals, _ = matrix.flatten().abs().sort()
+        cutoff = vals[int(np.ceil(p * len(vals)))]
+        return (matrix.abs() >= cutoff).to(dtype=matrix.dtype)
 
     def effective_energy_gradient(self, v):
         v = v.to(self.weights)
@@ -42,36 +68,4 @@ class MaskedBinaryRBM(qucumber.rbm.BinaryRBM):
             vb_grad = -torch.sum(v, 0)
             hb_grad = -torch.sum(prob, 0)
 
-        return parameters_to_vector([W_grad, vb_grad, hb_grad])
-
-    def prob_v_given_h(self, h, out=None):
-        if h.dim() < 2:  # create extra axis, if needed
-            h = h.unsqueeze(0)
-            unsqueezed = True
-        else:
-            unsqueezed = False
-
-        p = torch.addmm(
-            self.visible_bias.data, h, (self.weights * self.mask).data, out=out
-        ).sigmoid_()
-
-        if unsqueezed:
-            return p.squeeze_(0)  # remove superfluous axis, if it exists
-        else:
-            return p
-
-    def prob_h_given_v(self, v, out=None):
-        if v.dim() < 2:  # create extra axis, if needed
-            v = v.unsqueeze(0)
-            unsqueezed = True
-        else:
-            unsqueezed = False
-
-        p = torch.addmm(
-            self.hidden_bias.data, v, (self.weights * self.mask).data.t(), out=out
-        ).sigmoid_()
-
-        if unsqueezed:
-            return p.squeeze_(0)  # remove superfluous axis, if it exists
-        else:
-            return p
+        return parameters_to_vector([W_grad * self.mask, vb_grad, hb_grad])
