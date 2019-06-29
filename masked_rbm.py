@@ -2,24 +2,25 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn.utils import parameters_to_vector
-import qucumber
+from qucumber.rbm import BinaryRBM
 
 
-class MaskedBinaryRBM(qucumber.rbm.BinaryRBM):
+class MaskedBinaryRBM(BinaryRBM):
     # Works just like the usual BinaryRBM module, except that the given mask
     #  is applied to the weight-matrix every time the weight matrix is used.
 
     def __init__(
         self, init_weights, mask, gpu=True
     ):
-        self.mask = mask.to(self.weights) if mask is not None else 1
-        self.init_weights = init_weights.to(self.weights)
+        self.mask = 1
 
         super(MaskedBinaryRBM, self).__init__(
             init_weights.shape[0], init_weights.shape[1],
             zero_weights=True, gpu=gpu
         )  # no point randomizing weights if we're gonna overwrite them anyway
 
+        self.mask = mask.to(self.weights) if mask is not None else 1
+        self.init_weights = init_weights.to(self.weights)
         self.weights = nn.Parameter(self.mask * self.init_weights)
 
     def initialize_parameters(self, zero_weights=False):
