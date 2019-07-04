@@ -21,7 +21,10 @@ class MaskedBinaryRBM(BinaryRBM):
             zero_weights=True, gpu=gpu
         )  # no point randomizing weights if we're gonna overwrite them anyway
 
-        self.masks = {k: v.to(self.weights) for k, v in masks.items()}
+
+        # given masks use the convention of: 1 = pruned, 0 = kept
+        #  in order to use these as multiplicative masks, we need to flip them
+        self.masks = {k: (1 - v.to(self.weights)) for k, v in masks.items()}
         self.init_params = {k: v.to(self.weights) for k, v in self.init_params.items()}
 
         for name, param in self.named_parameters():
@@ -59,7 +62,7 @@ class MaskedBinaryRBM(BinaryRBM):
     def create_mask(matrix, p=0.5):
         vals, _ = matrix.flatten().abs().sort()
         cutoff = vals[int(np.ceil(p * len(vals)))]
-        return (matrix.abs() >= cutoff).to(dtype=matrix.dtype)
+        return (matrix.abs() < cutoff).to(dtype=matrix.dtype)
 
     def effective_energy_gradient(self, v):
         v = v.to(self.weights)
