@@ -10,18 +10,23 @@ class MaskedBinaryRBM(BinaryRBM):
     #  is applied to the weight-matrix every time the weight matrix is used.
 
     def __init__(
-        self, init_weights, mask, gpu=True
+        self, init_params, masks, gpu=True
     ):
-        self.mask = 1
+        self.init_params = dict(init_params)
+        self.masks = {k: 1 for k in init_params.keys()}
 
         super(MaskedBinaryRBM, self).__init__(
-            init_weights.shape[0], init_weights.shape[1],
+            self.init_params["weights"].shape[0],
+            self.init_params["weights"].shape[1],
             zero_weights=True, gpu=gpu
         )  # no point randomizing weights if we're gonna overwrite them anyway
 
-        self.mask = mask.to(self.weights) if mask is not None else 1
-        self.init_weights = init_weights.to(self.weights)
-        self.weights = nn.Parameter(self.mask * self.init_weights)
+        self.masks = {k: v.to(self.weights) for k, v in masks.items()}
+        self.init_params = {k: v.to(self.weights) for k, v in self.init_params.items()}
+
+        for name, param in self.named_parameters():
+            param = nn.Parameter(self.masks[name] * self.init_params[name])
+
 
     def initialize_parameters(self, zero_weights=False):
         """Randomize the parameters of the RBM"""
@@ -35,7 +40,7 @@ class MaskedBinaryRBM(BinaryRBM):
                     device=self.device,
                     dtype=torch.double,
                 )
-                * self.mask
+                * self.masks["weights"]
                 / np.sqrt(self.num_visible)
             ),
             requires_grad=False,
@@ -69,4 +74,6 @@ class MaskedBinaryRBM(BinaryRBM):
             vb_grad = -torch.sum(v, 0)
             hb_grad = -torch.sum(prob, 0)
 
-        return parameters_to_vector([W_grad * self.mask, vb_grad, hb_grad])
+        return parameters_to_vector([W_grad * self.masks["weights"],
+                                     vb_grad * self.masks["visible_bias"],
+                                     hb_grad * self.masks["hidden_bias"]])
