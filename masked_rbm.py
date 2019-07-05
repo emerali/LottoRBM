@@ -13,14 +13,13 @@ class MaskedBinaryRBM(BinaryRBM):
         self, init_params, masks, gpu=True
     ):
         self.init_params = dict(init_params)
-        self.masks = {k: 1 for k in init_params.keys()}
+        self.masks = {k: 1 for k in self.init_params.keys()}
 
         super(MaskedBinaryRBM, self).__init__(
-            self.init_params["weights"].shape[0],
             self.init_params["weights"].shape[1],
+            self.init_params["weights"].shape[0],
             zero_weights=True, gpu=gpu
         )  # no point randomizing weights if we're gonna overwrite them anyway
-
 
         # given masks use the convention of: 1 = pruned, 0 = kept
         #  in order to use these as multiplicative masks, we need to flip them
@@ -29,7 +28,6 @@ class MaskedBinaryRBM(BinaryRBM):
 
         for name, param in self.named_parameters():
             param = nn.Parameter(self.masks[name] * self.init_params[name])
-
 
     def initialize_parameters(self, zero_weights=False):
         """Randomize the parameters of the RBM"""
