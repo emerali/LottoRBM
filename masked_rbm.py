@@ -8,7 +8,6 @@ from qucumber.rbm import BinaryRBM
 class MaskedBinaryRBM(BinaryRBM):
     # Works just like the usual BinaryRBM module, except that the given mask
     #  is applied to the weight-matrix every time the weight matrix is used.
-
     def __init__(
         self, init_params, masks, gpu=True
     ):
@@ -16,22 +15,23 @@ class MaskedBinaryRBM(BinaryRBM):
         self.masks = {k: 1 for k in self.init_params.keys()}
 
         super(MaskedBinaryRBM, self).__init__(
-            self.init_params["weights"].shape[1],
-            self.init_params["weights"].shape[0],
+            num_visible=self.init_params["weights"].shape[1],
+            num_hidden=self.init_params["weights"].shape[0],
             zero_weights=True, gpu=gpu
         )  # no point randomizing weights if we're gonna overwrite them anyway
 
-        # given masks use the convention of: 1 = pruned, 0 = kept
+        # given masks will use the convention of: 1 = pruned, 0 = kept
         #  in order to use these as multiplicative masks, we need to flip them
         self.masks = {k: (1 - v.to(self.weights)) for k, v in masks.items()}
-        self.init_params = {k: v.to(self.weights) for k, v in self.init_params.items()}
+        self.init_params = {k: v.to(self.weights)
+                            for k, v in self.init_params.items()}
 
         for name, param in self.named_parameters():
-            param = nn.Parameter(self.masks[name] * self.init_params[name])
+            param = nn.Parameter(self.masks[name] * self.init_params[name],
+                                 requires_grad=False)
 
     def initialize_parameters(self, zero_weights=False):
         """Randomize the parameters of the RBM"""
-
         gen_tensor = torch.zeros if zero_weights else torch.randn
         self.weights = nn.Parameter(
             (
@@ -46,7 +46,6 @@ class MaskedBinaryRBM(BinaryRBM):
             ),
             requires_grad=False,
         )
-
         self.visible_bias = nn.Parameter(
             torch.zeros(self.num_visible, device=self.device, dtype=torch.double),
             requires_grad=False,
@@ -57,10 +56,15 @@ class MaskedBinaryRBM(BinaryRBM):
         )
 
     @staticmethod
-    def create_mask(matrix, p=0.5):
-        vals, _ = matrix.flatten().abs().sort()
-        cutoff = vals[int(np.ceil(p * len(vals)))]
-        return (matrix.abs() < cutoff).to(dtype=matrix.dtype)
+    def create_mask(matrix, p=None, cutoff=None):
+        if p is not None:
+            vals, _ = matrix.flatten().abs().sort()
+            cutoff = vals[int(np.ceil(p * len(vals)))]
+            return (matrix.abs() < cutoff).to(dtype=matrix.dtype)
+        elif cutoff is not None:
+            return (matrix.abs() < cutoff).to(dtype=matrix.dtype)
+        else:
+            raise ValueError("One of (p, cutoff) must be given!")
 
     def effective_energy_gradient(self, v):
         v = v.to(self.weights)
