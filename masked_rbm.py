@@ -26,9 +26,10 @@ class MaskedBinaryRBM(BinaryRBM):
         self.init_params = {k: v.to(self.weights)
                             for k, v in self.init_params.items()}
 
-        for name, param in self.named_parameters():
-            param = nn.Parameter(self.masks[name] * self.init_params[name],
-                                 requires_grad=False)
+        self.load_state_dict({
+            name: self.masks[name] * self.init_params[name]
+            for name, _ in self.named_parameters()
+        })
 
     def initialize_parameters(self, zero_weights=False):
         """Randomize the parameters of the RBM"""
