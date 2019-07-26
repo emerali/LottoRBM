@@ -3,6 +3,7 @@ import torch
 from torch import nn
 from torch.nn.utils import parameters_to_vector
 from qucumber.rbm import BinaryRBM
+from qucumber import _warn_on_missing_gpu
 
 
 class MaskedBinaryRBM(BinaryRBM):
@@ -12,49 +13,57 @@ class MaskedBinaryRBM(BinaryRBM):
         self, init_params, masks, gpu=True
     ):
         self.init_params = dict(init_params)
-        self.masks = {k: 1 for k in self.init_params.keys()}
+        
+        _warn_on_missing_gpu(gpu)
+        self.gpu = gpu and torch.cuda.is_available()
+
+        self.device = torch.device("cuda") if self.gpu else torch.device("cpu")
+        
+        # given masks will use the convention of: 1 = pruned, 0 = kept
+        #  in order to use these as multiplicative masks, we need to flip them
+        self.masks = {k: (1 - v.to(self.device)) for k, v in masks.items()}
+        self.init_params = {k: v.to(self.device)
+                            for k, v in self.init_params.items()}
 
         super(MaskedBinaryRBM, self).__init__(
             num_visible=self.init_params["weights"].shape[1],
-            num_hidden=self.init_params["weights"].shape[0],
-            zero_weights=True, gpu=gpu
-        )  # no point randomizing weights if we're gonna overwrite them anyway
-
-        # given masks will use the convention of: 1 = pruned, 0 = kept
-        #  in order to use these as multiplicative masks, we need to flip them
-        self.masks = {k: (1 - v.to(self.weights)) for k, v in masks.items()}
-        self.init_params = {k: v.to(self.weights)
-                            for k, v in self.init_params.items()}
-
-        self.load_state_dict({
-            name: self.masks[name] * self.init_params[name]
-            for name, _ in self.named_parameters()
-        })
-
-    def initialize_parameters(self, zero_weights=False):
-        """Randomize the parameters of the RBM"""
-        gen_tensor = torch.zeros if zero_weights else torch.randn
-        self.weights = nn.Parameter(
-            (
-                gen_tensor(
-                    self.num_hidden,
-                    self.num_visible,
-                    device=self.device,
-                    dtype=torch.double,
-                )
-                * self.masks["weights"]
-                / np.sqrt(self.num_visible)
-            ),
-            requires_grad=False,
+            num_hidden=self.init_params["weights"].shape[0], gpu=gpu
         )
-        self.visible_bias = nn.Parameter(
-            torch.zeros(self.num_visible, device=self.device, dtype=torch.double),
-            requires_grad=False,
-        )
-        self.hidden_bias = nn.Parameter(
-            torch.zeros(self.num_hidden, device=self.device, dtype=torch.double),
-            requires_grad=False,
-        )
+
+
+    def initialize_parameters(self, init_mode="reinit", **kwargs):
+        if init_mode == "reinit":
+            self.weights = nn.Parameter(
+                self.init_params["weights"] * self.masks["weights"],
+                requires_grad=False,
+            )
+            self.visible_bias = nn.Parameter(
+                self.init_params["visible_bias"] * self.masks["visible_bias"],
+                requires_grad=False,
+            )
+            self.hidden_bias = nn.Parameter(
+                self.init_params["hidden_bias"] * self.masks["hidden_bias"],
+                requires_grad=False,
+            )
+        elif init_mode == "constant":
+            self.weights = nn.Parameter(
+                torch.sign(self.init_params["weights"] * self.masks["weights"])
+                * torch.std(self.init_params["weights"]),
+                requires_grad=False,
+            )
+            self.visible_bias = nn.Parameter(
+                torch.sign(self.init_params["visible_bias"] * self.masks["visible_bias"])
+                * torch.std(self.init_params["visible_bias"]),
+                requires_grad=False,
+            )
+            self.hidden_bias = nn.Parameter(
+                torch.sign(self.init_params["hidden_bias"] * self.masks["hidden_bias"])
+                * torch.std(self.init_params["hidden_bias"]),
+                requires_grad=False,
+            )
+        else:
+            raise ValueError("Invalid input '" + init_mode 
+                             + "' for 'init_mode'! Must be one of ['reinit', 'constant']")
 
     @staticmethod
     def create_mask(matrix, p=None, cutoff=None):
@@ -80,6 +89,6 @@ class MaskedBinaryRBM(BinaryRBM):
             vb_grad = -torch.sum(v, 0)
             hb_grad = -torch.sum(prob, 0)
 
-        return parameters_to_vector([W_grad * self.masks["weights"],
-                                     vb_grad * self.masks["visible_bias"],
-                                     hb_grad * self.masks["hidden_bias"]])
+        return parameters_to_vector([W_grad * self.masks["weights"].abs(),
+                                     vb_grad * self.masks["visible_bias"].abs(),
+                                     hb_grad * self.masks["hidden_bias"].abs()])
